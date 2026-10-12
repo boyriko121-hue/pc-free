@@ -1,0 +1,68 @@
+name: Compile MT5 Expert Advisor
+
+on:
+  workflow_dispatch:
+
+jobs:
+  compile:
+    runs-on: windows-latest
+
+    steps:
+      - name: Get EA source code
+        uses: actions/checkout@v4
+
+      - name: Install MetaTrader 5
+        shell: pwsh
+        run: |
+          $installer = "$env:RUNNER_TEMP\mt5setup.exe"
+          $url = "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/auto" -Wait
+
+          Start-Sleep -Seconds 10
+
+          $editor = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" `
+            -Filter "metaeditor64.exe" -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $editor) {
+            throw "MetaEditor was not found after installation."
+          }
+
+          "METAEDITOR_PATH=$($editor.FullName)" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Compile EA
+        shell: pwsh
+        run: |
+          $source = Join-Path $env:GITHUB_WORKSPACE "Fusion_Gold_Silver_Scalper.mq5"
+
+          if (-not (Test-Path $source)) {
+            throw "EA source file was not found."
+          }
+
+          $arguments = "/compile:`"$source`" /log"
+          Start-Process -FilePath $env:METAEDITOR_PATH `
+            -ArgumentList $arguments -Wait
+
+          $output = [System.IO.Path]::ChangeExtension($source, ".ex5")
+          $log = [System.IO.Path]::ChangeExtension($source, ".log")
+
+          if (Test-Path $log) {
+            Get-Content $log
+          }
+
+          if (-not (Test-Path $output)) {
+            throw "Compilation failed: EX5 file was not generated."
+          }
+
+      - name: Save compiled EA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fusion-Gold-Silver-Scalper
+          path: |
+            Fusion_Gold_Silver_Scalper.ex5
+            Fusion_Gold_Silver_Scalper.log
+          if-no-files-found: warn
