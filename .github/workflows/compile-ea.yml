@@ -73,47 +73,47 @@ jobs:
             Write-Host "Trade library: $($tradeLibrary.FullName)"
             Write-Host "MQL5 folder: $mql5Root"
 
-      - name: Compile EA
-        shell: pwsh
-        run: |
-          $source = Join-Path $env:GITHUB_WORKSPACE "Fusion_Gold_Silver_Scalper.mq5"
+        - name: Compile EA
+          shell: pwsh
+          run: |
+            $source = Join-Path $env:GITHUB_WORKSPACE "Fusion_Gold_Silver_Scalper.mq5"
 
-          if (-not (Test-Path $source)) {
+            if (-not (Test-Path $source)) {
             throw "EA source file was not found."
-          }
+            }
 
-          $experts = Join-Path $env:MQL5_ROOT "Experts"
-          New-Item -ItemType Directory -Path $experts -Force | Out-Null
+            $experts = Join-Path $env:MQL5_ROOT "Experts"
+            New-Item -ItemType Directory -Path $experts -Force | Out-Null
 
-          $target = Join-Path $experts "Fusion_Gold_Silver_Scalper.mq5"
-          Copy-Item $source $target -Force
+            $target = Join-Path $experts "Fusion_Gold_Silver_Scalper.mq5"
+            Copy-Item $source $target -Force
 
-          $arguments = "/compile:`"$target`" /log"
-          Start-Process -FilePath $env:METAEDITOR_PATH `
+            $arguments = "/compile:`"$target`" /log"
+            Start-Process -FilePath $env:METAEDITOR_PATH `
             -ArgumentList $arguments -Wait
 
-          $output = [System.IO.Path]::ChangeExtension($target, ".ex5")
-          $log = [System.IO.Path]::ChangeExtension($target, ".log")
+            $output = [System.IO.Path]::ChangeExtension($target, ".ex5")
+            $log = [System.IO.Path]::ChangeExtension($target, ".log")
 
-          if (Test-Path $log) {
+            if (Test-Path $log) {
             Get-Content $log
-          }
+            }
 
-          if (-not (Test-Path $output)) {
+            if (-not (Test-Path $output)) {
             throw "Compilation failed. Check the compiler log above."
-          }
+            }
 
-          Copy-Item $output $env:GITHUB_WORKSPACE -Force
+            Copy-Item $output $env:GITHUB_WORKSPACE -Force
 
-          if (Test-Path $log) {
+            if (Test-Path $log) {
             Copy-Item $log $env:GITHUB_WORKSPACE -Force
-          }
+            }
 
-      - name: Save compiled EA
-        uses: actions/upload-artifact@v4
-        with:
-          name: Fusion-Gold-Silver-Scalper
-          path: |
+        - name: Save compiled EA
+          uses: actions/upload-artifact@v4
+          with:
+           name: Fusion-Gold-Silver-Scalper
+           path: |
             Fusion_Gold_Silver_Scalper.ex5
             Fusion_Gold_Silver_Scalper.log
-          if-no-files-found: warn
+           if-no-files-found: warn
