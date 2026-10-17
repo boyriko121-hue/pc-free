@@ -74,7 +74,40 @@ jobs:
 
           "METAEDITOR_PATH=$($editor.FullName)" |
             Out-File $env:GITHUB_ENV -Append
+            
+      - name: Diagnose MetaTrader installation
+        shell: powershell
+        run: |
+          Write-Host "=== Searching for Trade.mqh ==="
 
+          $paths = @(
+            "C:\Program Files\MetaTrader 5",
+            "C:\Program Files (x86)\MetaTrader 5",
+            "$env:APPDATA\MetaQuotes",
+            "$env:LOCALAPPDATA\Programs"
+          )
+
+          foreach ($path in $paths) {
+            if (Test-Path $path) {
+              Write-Host "Searching: $path"
+
+              Get-ChildItem $path `
+                -Filter "Trade.mqh" `
+                -Recurse `
+                -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                  Write-Host "FOUND: $($_.FullName)"
+                }
+            }
+          }
+
+          Write-Host "=== Checking MetaEditor directory ==="
+
+          Get-ChildItem "C:\Program Files\MetaTrader 5" `
+            -Force -ErrorAction SilentlyContinue |
+            Select-Object Name, FullName |
+            Format-Table -AutoSize
+            
       - name: Compile both EAs
         shell: powershell
         run: |
