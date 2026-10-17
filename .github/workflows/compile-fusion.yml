@@ -1,0 +1,119 @@
+
+name: Compile Fusion MachineGun EAs
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Fusion_MachineGun_Recreation.mq5"
+      - "Fusion_MachineGun_PRO.mq5"
+      - ".github/workflows/compile-fusion.yml"
+
+jobs:
+  compile:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install MetaTrader 5
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = "$env:RUNNER_TEMP\mt5setup.exe"
+          $url = "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          if ((Get-Item $installer).Length -lt 1000000) {
+            throw "MT5 installer download looks incomplete."
+          }
+
+          $p = Start-Process -FilePath $installer `
+            -ArgumentList "/auto", "/path:C:\MT5" `
+            -Wait -PassThru
+
+          Write-Host "Installer exit code: $($p.ExitCode)"
+          Start-Sleep -Seconds 10
+
+          $editor = "C:\MT5\metaeditor64.exe"
+          if (-not (Test-Path $editor)) {
+            $found = Get-ChildItem "C:\MT5" `
+              -Filter "metaeditor64.exe" `
+              -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+            if ($found) { $editor = $found.FullName }
+          }
+
+          if (-not (Test-Path $editor)) {
+            throw "MetaEditor was not found after installation."
+          }
+
+          "METAEDITOR_PATH=$editor" |
+            Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Compile both EAs
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          $files = @(
+            "Fusion_MachineGun_Recreation.mq5",
+            "Fusion_MachineGun_PRO.mq5"
+          )
+          $failed = $false
+
+          foreach ($file in $files) {
+            if (-not (Test-Path $file)) {
+              Write-Host "Missing source: $file"
+              $failed = $true
+              continue
+            }
+
+            $source = (Resolve-Path $file).Path
+            $output = [System.IO.Path]::ChangeExtension($source, ".ex5")
+            $log = [System.IO.Path]::ChangeExtension($source, ".log")
+
+            Remove-Item $output, $log -Force `
+              -ErrorAction SilentlyContinue
+
+            Write-Host "Compiling $file"
+            $args = "/compile:`"$source`"", "/log"
+            $p = Start-Process -FilePath $env:METAEDITOR_PATH `
+              -ArgumentList $args -Wait -PassThru
+
+            Start-Sleep -Seconds 2
+
+            if (Test-Path $log) {
+              Get-Content $log
+            } else {
+              Write-Host "Compiler log was not created."
+            }
+
+            if (-not (Test-Path $output)) {
+              Write-Host "No EX5 produced for $file"
+              $failed = $true
+            } elseif ((Test-Path $log) -and
+              ((Get-Content $log -Raw) -match "\b[1-9]\d*\s+errors?\b")) {
+              Write-Host "Compiler reported errors for $file"
+              $failed = $true
+            } else {
+              Write-Host "EX5 file produced: $output"
+            }
+          }
+
+          if ($failed) {
+            throw "One or both EA builds failed. Inspect the logs."
+          }
+
+      - name: Upload EX5 files and compiler logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Fusion-MachineGun-Compile-Results
+          path: |
+            Fusion_MachineGun_Recreation.ex5
+            Fusion_MachineGun_Recreation.log
+            Fusion_MachineGun_PRO.ex5
+            Fusion_MachineGun_PRO.log
+          if-no-files-found: warn
