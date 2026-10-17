@@ -18,40 +18,62 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install MetaTrader 5
+      - name: Install and locate MetaTrader 5
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
+
           $installer = "$env:RUNNER_TEMP\mt5setup.exe"
           $url = "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
 
           Invoke-WebRequest -Uri $url -OutFile $installer
-          if ((Get-Item $installer).Length -lt 1000000) {
-            throw "MT5 installer download looks incomplete."
+
+          if (-not (Test-Path $installer)) {
+            throw "MT5 installer download failed."
           }
 
           $p = Start-Process -FilePath $installer `
-            -ArgumentList "/auto", "/path:C:\MT5" `
+            -ArgumentList "/auto" `
             -Wait -PassThru
 
           Write-Host "Installer exit code: $($p.ExitCode)"
-          Start-Sleep -Seconds 10
 
-          $editor = "C:\MT5\metaeditor64.exe"
-          if (-not (Test-Path $editor)) {
-            $found = Get-ChildItem "C:\MT5" `
-              -Filter "metaeditor64.exe" `
+          $roots = @(
+            "C:\Program Files\MetaTrader 5",
+            "C:\Program Files (x86)\MetaTrader 5",
+            "$env:APPDATA\MetaQuotes\Terminal"
+          )
+
+          $editor = Get-ChildItem $roots `
+            -Filter "metaeditor64.exe" `
+            -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $editor) {
+            throw "MetaEditor was not found. Installer may have failed."
+          }
+
+          $terminalDir = Split-Path $editor.FullName
+          Write-Host "MetaEditor: $($editor.FullName)"
+
+          $include = Join-Path $terminalDir "MQL5\Include\Trade\Trade.mqh"
+
+          if (-not (Test-Path $include)) {
+            $include = Get-ChildItem $roots `
+              -Filter "Trade.mqh" `
               -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match "\\MQL5\\Include\\Trade\\Trade\.mqh$" } |
               Select-Object -First 1
-            if ($found) { $editor = $found.FullName }
           }
 
-          if (-not (Test-Path $editor)) {
-            throw "MetaEditor was not found after installation."
+          if (-not $include) {
+            throw "Trade.mqh was not found in the installed MetaTrader files."
           }
 
-          "METAEDITOR_PATH=$editor" |
-            Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "Trade library: $($include.FullName)"
+
+          "METAEDITOR_PATH=$($editor.FullName)" |
+            Out-File $env:GITHUB_ENV -Append
 
       - name: Compile both EAs
         shell: powershell
