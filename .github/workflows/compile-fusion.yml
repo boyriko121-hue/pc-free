@@ -76,6 +76,7 @@ jobs:
             Out-File $env:GITHUB_ENV -Append
             
       - name: Diagnose MetaTrader installation
+        if: always()
         shell: powershell
         run: |
           Write-Host "=== Searching for Trade.mqh ==="
