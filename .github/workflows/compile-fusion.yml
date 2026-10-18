@@ -14,11 +14,11 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Checkout repository
+      - name: Get EA source code
         uses: actions/checkout@v4
 
-      - name: Install MetaTrader 5
-        shell: powershell
+      - name: Install and verify MetaTrader 5
+        shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
@@ -26,89 +26,142 @@ jobs:
           $url = "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
 
           Invoke-WebRequest -Uri $url -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/auto" -Wait
+          Start-Sleep -Seconds 10
 
-          Write-Host "Starting MT5 installer..."
+          $editor = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" `
+            -Filter "metaeditor64.exe" -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
-          $p = Start-Process -FilePath $installer `
-            -ArgumentList "/auto", "/path:C:\Program Files\MetaTrader 5" `
-            -Wait -PassThru
-
-          Write-Host "Installer exit code: $($p.ExitCode)"
-
-          Write-Host "Checking for the standard trading library..."
-
-          $library = "C:\Program Files\MetaTrader 5\MQL5\Include\Trade\Trade.mqh"
-
-          if (Test-Path $library) {
-            Write-Host "FOUND: $library"
-          } else {
-            Write-Host "Trade.mqh not found at the expected path."
+          if (-not $editor) {
+            throw "MetaEditor was not found after installation."
           }
 
-      - name: Diagnose MT5 files
-        if: always()
-        shell: powershell
-        run: |
-          Write-Host "=== MetaTrader installation root ==="
+          $terminal = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" `
+            -Filter "terminal64.exe" -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
 
-          $root = "C:\Program Files\MetaTrader 5"
-
-          if (Test-Path $root) {
-            Get-ChildItem $root -Force |
-              Select-Object Name, FullName |
-              Format-Table -AutoSize
+          if ($terminal) {
+            Start-Process -FilePath $terminal.FullName
+            Start-Sleep -Seconds 20
+            Get-Process terminal64 -ErrorAction SilentlyContinue |
+              Stop-Process -Force
           }
 
-          Write-Host "=== MQL5 directories ==="
-
-          $searchRoots = @(
-            "C:\Program Files\MetaTrader 5",
-            "$env:APPDATA\MetaQuotes\Terminal"
+          $searchPaths = @(
+            "C:\Program Files",
+            "C:\Program Files (x86)",
+            "$env:APPDATA\MetaQuotes\Terminal",
+            "$env:LOCALAPPDATA\Programs"
           )
 
-          foreach ($path in $searchRoots) {
-            if (Test-Path $path) {
-              Get-ChildItem $path -Directory -Recurse `
-                -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -eq "MQL5" } |
-                ForEach-Object {
-                  Write-Host "MQL5 folder: $($_.FullName)"
-                }
-            }
+          $tradeLibrary = Get-ChildItem $searchPaths `
+            -Filter "Trade.mqh" -Recurse `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -match '\\MQL5\\Include\\Trade\\Trade\.mqh$'
+            } |
+            Select-Object -First 1
+
+          if (-not $tradeLibrary) {
+            throw "Trade.mqh was not found."
           }
 
-          Write-Host "=== Trade.mqh search ==="
+          $mql5Root = $tradeLibrary.Directory.Parent.Parent.FullName
 
-          foreach ($path in $searchRoots) {
-            if (Test-Path $path) {
-              Get-ChildItem $path -Filter "Trade.mqh" `
-                -File -Recurse -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                  Write-Host "FOUND: $($_.FullName)"
-                }
-            }
-          }
+          "METAEDITOR_PATH=$($editor.FullName)" |
+            Out-File $env:GITHUB_ENV -Append
 
-          Write-Host "=== MetaEditor version ==="
+          "MQL5_ROOT=$mql5Root" |
+            Out-File $env:GITHUB_ENV -Append
 
-          $editor = "C:\Program Files\MetaTrader 5\MetaEditor64.exe"
-
-          if (Test-Path $editor) {
-            (Get-Item $editor).VersionInfo |
-              Select-Object FileVersion, ProductVersion |
-              Format-List
-          }
+          Write-Host "MetaEditor: $($editor.FullName)"
+          Write-Host "Trade library: $($tradeLibrary.FullName)"
+          Write-Host "MQL5 folder: $mql5Root"
 
       - name: Compile both EAs
-        shell: powershell
+        shell: pwsh
         run: |
-          throw "Compilation paused intentionally until the installation diagnostic is reviewed."
+          $ErrorActionPreference = "Stop"
 
-      - name: Upload logs
+          $files = @(
+            "Fusion_MachineGun_Recreation.mq5",
+            "Fusion_MachineGun_PRO.mq5"
+          )
+
+          $failed = $false
+          $experts = Join-Path $env:MQL5_ROOT "Experts"
+
+          New-Item -ItemType Directory -Path $experts -Force |
+            Out-Null
+
+          foreach ($file in $files) {
+            $source = Join-Path $env:GITHUB_WORKSPACE $file
+
+            if (-not (Test-Path $source)) {
+              Write-Host "Missing source: $source"
+              $failed = $true
+              continue
+            }
+
+            $target = Join-Path $experts $file
+            Copy-Item $source $target -Force
+
+            $output = [System.IO.Path]::ChangeExtension($target, ".ex5")
+            $log = [System.IO.Path]::ChangeExtension($target, ".log")
+
+            Remove-Item $output, $log -Force `
+              -ErrorAction SilentlyContinue
+
+            Write-Host "Compiling $file"
+
+            $arguments = "/compile:`"$target`" /log"
+
+            Start-Process -FilePath $env:METAEDITOR_PATH `
+              -ArgumentList $arguments -Wait
+
+            if (Test-Path $log) {
+              Get-Content $log
+            } else {
+              Write-Host "Compiler log was not created for $file"
+            }
+
+            if (-not (Test-Path $output)) {
+              Write-Host "No EX5 file produced for $file"
+              $failed = $true
+              continue
+            }
+
+            if ((Test-Path $log) -and
+                ((Get-Content $log -Raw) -match '\b[1-9]\d*\s+errors?\b')) {
+              Write-Host "Compiler errors found in $file"
+              $failed = $true
+              continue
+            }
+
+            Copy-Item $output $env:GITHUB_WORKSPACE -Force
+
+            if (Test-Path $log) {
+              Copy-Item $log $env:GITHUB_WORKSPACE -Force
+            }
+
+            Write-Host "Compiled successfully: $file"
+          }
+
+          if ($failed) {
+            throw "One or both EAs failed. Check their compiler logs."
+          }
+
+      - name: Save compiled EAs and logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Fusion-MT5-Diagnostics
+          name: Fusion-MachineGun-Compile-Results
           path: |
-            ${{ runner.temp }}\mt5setup.exe
+            Fusion_MachineGun_Recreation.ex5
+            Fusion_MachineGun_Recreation.log
+            Fusion_MachineGun_PRO.ex5
+            Fusion_MachineGun_PRO.log
           if-no-files-found: warn
