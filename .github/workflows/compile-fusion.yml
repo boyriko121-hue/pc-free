@@ -17,7 +17,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download and inspect MT5 installer
+      - name: Install MetaTrader 5
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
@@ -27,19 +27,23 @@ jobs:
 
           Invoke-WebRequest -Uri $url -OutFile $installer
 
-          Write-Host "Installer size:"
-          (Get-Item $installer).Length
+          Write-Host "Starting MT5 installer..."
 
-          Write-Host "Installer signature:"
-          Get-AuthenticodeSignature $installer |
-            Format-List Status, StatusMessage, SignerCertificate
-
-          Write-Host "Starting installer..."
           $p = Start-Process -FilePath $installer `
-            -ArgumentList "/auto" `
+            -ArgumentList "/auto", "/path:C:\Program Files\MetaTrader 5" `
             -Wait -PassThru
 
           Write-Host "Installer exit code: $($p.ExitCode)"
+
+          Write-Host "Checking for the standard trading library..."
+
+          $library = "C:\Program Files\MetaTrader 5\MQL5\Include\Trade\Trade.mqh"
+
+          if (Test-Path $library) {
+            Write-Host "FOUND: $library"
+          } else {
+            Write-Host "Trade.mqh not found at the expected path."
+          }
 
       - name: Diagnose MT5 files
         if: always()
