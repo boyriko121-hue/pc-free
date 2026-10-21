@@ -1,0 +1,141 @@
+name: Compile CRT Gold Scalper
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "CRT_Gold_Scalper.mq5"
+      - ".github/workflows/compile-crt-gold.yml"
+
+jobs:
+  compile:
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Get EA source code
+        uses: actions/checkout@v4
+
+      - name: Install and verify MetaTrader 5
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $installer = "$env:RUNNER_TEMP\mt5setup.exe"
+          $url = "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe"
+
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          Start-Process -FilePath $installer -ArgumentList "/auto" -Wait
+          Start-Sleep -Seconds 10
+
+          $editor = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" `
+            -Filter "metaeditor64.exe" -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if (-not $editor) {
+            throw "MetaEditor was not found after installation."
+          }
+
+          $terminal = Get-ChildItem "C:\Program Files","C:\Program Files (x86)" `
+            -Filter "terminal64.exe" -Recurse `
+            -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+
+          if ($terminal) {
+            Start-Process -FilePath $terminal.FullName
+            Start-Sleep -Seconds 20
+            Get-Process terminal64 -ErrorAction SilentlyContinue |
+              Stop-Process -Force
+          }
+
+          $searchPaths = @(
+            "C:\Program Files",
+            "C:\Program Files (x86)",
+            "$env:APPDATA\MetaQuotes\Terminal",
+            "$env:LOCALAPPDATA\Programs"
+          )
+
+          $tradeLibrary = Get-ChildItem $searchPaths `
+            -Filter "Trade.mqh" -Recurse `
+            -ErrorAction SilentlyContinue |
+            Where-Object {
+              $_.FullName -match '\\MQL5\\Include\\Trade\\Trade\.mqh$'
+            } |
+            Select-Object -First 1
+
+          if (-not $tradeLibrary) {
+            throw "Trade.mqh was not found."
+          }
+
+          $mql5Root = $tradeLibrary.Directory.Parent.Parent.FullName
+
+          "METAEDITOR_PATH=$($editor.FullName)" |
+            Out-File $env:GITHUB_ENV -Append
+
+          "MQL5_ROOT=$mql5Root" |
+            Out-File $env:GITHUB_ENV -Append
+
+          Write-Host "MetaEditor: $($editor.FullName)"
+          Write-Host "MQL5 folder: $mql5Root"
+
+      - name: Compile CRT Gold Scalper
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $file = "CRT_Gold_Scalper.mq5"
+          $source = Join-Path $env:GITHUB_WORKSPACE $file
+
+          if (-not (Test-Path $source)) {
+            throw "Source file not found: $source"
+          }
+
+          $experts = Join-Path $env:MQL5_ROOT "Experts"
+          New-Item -ItemType Directory -Path $experts -Force |
+            Out-Null
+
+          $target = Join-Path $experts $file
+          Copy-Item $source $target -Force
+
+          $output = [System.IO.Path]::ChangeExtension($target, ".ex5")
+          $log = [System.IO.Path]::ChangeExtension($target, ".log")
+
+          Remove-Item $output, $log -Force `
+            -ErrorAction SilentlyContinue
+
+          $arguments = "/compile:`"$target`" /log"
+
+          Start-Process -FilePath $env:METAEDITOR_PATH `
+            -ArgumentList $arguments -Wait
+
+          if (Test-Path $log) {
+            Get-Content $log
+          } else {
+            throw "Compiler log was not created."
+          }
+
+          if (-not (Test-Path $output)) {
+            throw "No EX5 file was produced. Check the compiler log."
+          }
+
+          $logText = Get-Content $log -Raw
+
+          if ($logText -match '\b[1-9]\d*\s+errors?\b') {
+            throw "Compilation errors detected. Check the log."
+          }
+
+          Copy-Item $output $env:GITHUB_WORKSPACE -Force
+          Copy-Item $log $env:GITHUB_WORKSPACE -Force
+
+          Write-Host "Compilation completed. EX5 file produced."
+
+      - name: Upload compiled EA and compiler log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CRT-Gold-Scalper-Compile-Results
+          path: |
+            CRT_Gold_Scalper.ex5
+            CRT_Gold_Scalper.log
+          if-no-files-found: warn
